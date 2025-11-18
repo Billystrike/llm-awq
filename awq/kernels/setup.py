@@ -18,6 +18,7 @@ extra_compile_args = {
         "--expt-extended-lambda",
         "--use_fast_math",
         "--threads=8",
+
     ],
 }
 

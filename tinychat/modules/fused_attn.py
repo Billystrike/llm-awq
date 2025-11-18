@@ -29,11 +29,13 @@ class QuantLlamaRotaryEmbedding(nn.Module):
         self.dim = dim
         self.max_position_embeddings = max_position_embeddings
         self.base = base
+        #θ_i = 10000^(2i/d)    →   inv_freq_i = 1/θ_i
         inv_freq = 1.0 / (
             self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim)
         )
         self.register_buffer("inv_freq", inv_freq)
         # Build here to make `torch.jit.trace` work.
+        # 提前预计算好 2048 长度的 cos/sin cache（避免每次 forward 都算）。
         self._set_cos_sin_cache(
             seq_len=max_position_embeddings,
             device=self.inv_freq.device,
@@ -42,17 +44,17 @@ class QuantLlamaRotaryEmbedding(nn.Module):
 
     def _set_cos_sin_cache(self, seq_len, device, dtype):
         self.max_seq_len_cached = seq_len
-        t = torch.arange(
+        t = torch.arange( # t: [0, 1, 2, ..., 2047]，形状 [seq_len]
             self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype
         )
-
+        ## freqs: [seq_len, dim//2]，每个位置 pos * inv_freq
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         # emb = torch.cat((freqs, freqs), dim=-1)
 
-        cos = freqs.cos()
+        cos = freqs.cos() # [seq_len, dim//2]
         sin = freqs.sin()
-        cache = torch.cat((cos, sin), dim=-1)
+        cache = torch.cat((cos, sin), dim=-1) # [seq_len, dim]
 
         # self.register_buffer("cos_cached", emb.cos()[None, None, :, :].to(dtype), persistent=False)
         # self.register_buffer("sin_cached", emb.sin()[None, None, :, :].to(dtype), persistent=False)
@@ -67,8 +69,10 @@ class QuantLlamaRotaryEmbedding(nn.Module):
         # Apply rotary embedding to the query and key before passing them
         # to the attention op.
         # print(positions.shape, query.shape, key.shape, self.cos_sin_cache.shape)
+        # 确保内存连续，CUDA kernel 要求
         query = query.contiguous()
         key = key.contiguous()
+        #C++/CUDA 扩展函数
         awq_inference_engine.rotary_embedding_neox(
             positions,
             query,
@@ -110,13 +114,13 @@ class QuantLlamaAttention(nn.Module):
     ):
         """Input shape: Batch x Time x Channel"""
 
-        bsz, q_len, _ = hidden_states.size()
+        bsz, q_len, _ = hidden_states.size() #[bsz, q_len, d_model]
 
-        qkv_states = self.qkv_proj(hidden_states)
-        qkv_states = qkv_states.view(bsz, q_len, 3, self.num_heads, self.head_dim)
+        qkv_states = self.qkv_proj(hidden_states) #[bsz, q_len,d_model*3]
+        qkv_states = qkv_states.view(bsz, q_len, 3, self.num_heads, self.head_dim) #将d_model 分成了 num_heads * head_dim
 
         # This updates the query and key states in-place, saving VRAM.
-        query_states, key_states, value_states = torch.split(qkv_states, 1, dim=2)
+        query_states, key_states, value_states = torch.split(qkv_states, 1, dim=2) #分离
         query_states, key_states = self.rotary_emb(
             query_states, key_states, position_ids
         )
@@ -132,7 +136,7 @@ class QuantLlamaAttention(nn.Module):
             bsz, q_len, self.num_heads, self.head_dim
         ).transpose(1, 2)
 
-        is_causal = past_key_value is None
+        is_causal = past_key_value is None #不需要显式传入 attention_mask，通过是否是第一轮来判断要不要 causal mask。
 
         kv_seq_len = q_len
         if past_key_value is not None:
@@ -578,7 +582,7 @@ def make_quant_attn(model, dev, flash_attn=True):
             else None
         )
 
-        qkv_layer = WQLinear(
+        qkv_layer = WQLinear( #将kqv三个线性层合并之后实例化一个新的WQLinear，在此之前KQV也分别是WQLinear
             q_proj.w_bit,
             q_proj.group_size,
             q_proj.in_features,
