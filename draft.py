@@ -25,9 +25,6 @@ print(torch.amax(b,0,keepdim=True).shape)
 
 
 
-
-
-
 # DSA部分
 
 #test
@@ -41,3 +38,5 @@ print(f'设备数量: {torch.cuda.device_count()}')
 from torch.utils.cpp_extension import CUDA_HOME
 print(f'PyTorch检测到的CUDA_HOME: {CUDA_HOME}')
 print(f'GPU名称: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else "无"}')
+
+import awq_inference_engine
