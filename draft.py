@@ -15,11 +15,8 @@ print(torch.amax(b,2))
 print(torch.amax(b,2).shape)
 print(torch.amax(b,0,keepdim=True).shape)
 
-
-
-
-
-
+print('22')
+from accelerate import init_empty_weights, load_checkpoint_and_dispatch
 
 
 
@@ -41,3 +38,5 @@ print(f'设备数量: {torch.cuda.device_count()}')
 from torch.utils.cpp_extension import CUDA_HOME
 print(f'PyTorch检测到的CUDA_HOME: {CUDA_HOME}')
 print(f'GPU名称: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else "无"}')
+
+import awq_inference_engine
