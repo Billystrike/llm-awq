@@ -6,7 +6,12 @@ def get_op_by_name(module, op_name):
     raise ValueError(f"Cannot find op {op_name} in module {module}")
 
 
-def set_op_by_name(layer, name, new_module):#将layer中匹配name的层替换成 new_module
+def set_op_by_name(layer, name, new_module):
+    '''
+    将layer中匹配name的层替换成 new_module
+    e.g. name = 'BloomBlock.mlp.gelu_impl', new_module = ScaledActivation实例
+    那么就将layer中的BloomBlock.mlp.gelu_impl替换成ScaledActivation实例
+    '''
     levels = name.split(".")#先对传入的name进行分割
     if len(levels) > 1:#如果传入的name是多层嵌套的e.g. BloomBlock.mlp.gelu_impl 就一层一层进入
         mod_ = layer

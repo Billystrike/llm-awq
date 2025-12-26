@@ -23,10 +23,17 @@ __all__ = ["run_awq"]
 
 
 def get_named_linears(module):
+    '''
+    返回module中所有线性层的字典，key是线性层的名字，value是线性层本身，例如：
+    {'layer1.attention.q_proj': Linear(in_features=512, out_features=512, bias=True),
+    'layer1.attention.k_proj': Linear(in_features=512, out_features=512, bias=True),
+    ...}
+    '''
     return {name: m for name, m in module.named_modules() if isinstance(m, nn.Linear)}
 
 
 def get_blocks(model):
+    '''返回的是模型的层（layers），这些层就是Transformer块（blocks）'''
     if model.__class__.__name__ in ("LlamaForCausalLM", "Qwen2ForCausalLM"):
         layers = model.model.layers
     elif model.__class__.__name__ == "InternVL3":
@@ -110,10 +117,13 @@ def run_awq(
     n_samples=512,
     seqlen=512,
     auto_scale=True, #是否自动搜索对应model中的各block中的线性层的最佳缩放因子s（不是零点量化的缩放因子）
-    mse_range=True,
+    mse_range=True,#是否自动搜索对应model中的各block中的线性层的最佳裁剪阈值max_val（用于减少量化误差）
     # some configs for ablation study
     calib_data="pileval", # 现在只支持这个校验数据集
 ):
+    '''
+    执行AWQ搜索，返回量化所需的信息，包括每个线性层的缩放因子和裁剪阈值。
+    '''
     from ..utils.calib_data import get_calib_dataset
     from ..utils.module import append_str_prefix, get_op_name
 
@@ -180,7 +190,7 @@ def run_awq(
         named_linears = get_named_linears(layer)
 
         # firstly, get input features of all linear layers
-        def cache_input_hook(m, x, y, name, feat_dict): #钩子函数
+        def cache_input_hook(m, x, y, name, feat_dict): #钩子函数，用来缓存线性层的输入特征
             '''
             m：被监控的模块（线性层）
             x：输入元组 (input_tensor,)
@@ -206,7 +216,7 @@ def run_awq(
         #第i个block进行前向传播的时候每个线性层都触发了钩子函数，input_feat中每层对应地形状是(n_split,block_size,in_feature) 其中in_feature因具体层而异 例如瓶颈结构的先升后降
         for h in handles:
             h.remove() #移除钩子函数
-        # now solve for scaling and clipping
+        # now solve for scaling and clipping。input_feat存储了当前block中所有线性层的【输入特征】
         input_feat = {k: torch.cat(v, dim=0) for k, v in input_feat.items()} #v是包含单个元素的list 所以cat操作不影响 k是每个线性层的名字
                                                                             # 经过cat之后字典的value 形状(n_split,block_size,in_feature)
 
@@ -224,7 +234,6 @@ def run_awq(
                 input_feat=input_feat,
             )
             #scale_list=[(prev_op_name, [layer_name], scale)] 收录了整个layer的 注意力层、MLP层的scales
-            # apply_scale(layer, scales_list, input_feat_dict=input_feat)
             # 对整个block中的线性层应用缩放
             apply_scale(layers[i], scales_list, input_feat_dict=input_feat)
 

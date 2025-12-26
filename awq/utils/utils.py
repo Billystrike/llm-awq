@@ -29,8 +29,8 @@ def simple_dispatch_model(model, device_map):
     '''
     from accelerate.hooks import add_hook_to_module, AlignDevicesHook #AlignDevicesHook：确保模块在执行时输入输出张量都在正确设备上（会自动把输入 tensor .to(device)）
 
-    if "" in device_map:
-        d = device_map[""] #如果device_map中有空字符串，将整个模型放在同一个设备上
+    if "" in device_map:#如果device_map中有空字符串这个key，说明整个模型都放在同一个设备上，为什么呢？因为模型的根模块名称就是空字符串
+        d = device_map[""] 
         model = model.to(torch.device(d))
         model.hf_device_map = device_map
         return model

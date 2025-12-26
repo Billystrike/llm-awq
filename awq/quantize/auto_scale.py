@@ -53,13 +53,16 @@ def scale_ln_fcs(ln, fcs, scales): #保持无损输出
 
 @torch.no_grad()
 def scale_fc_fc(fc1, fc2, scales):
+    '''
+    fc1=prev_op ;fc2=layer_to_scale ;scales=(fc2.in_feature,)
+    '''
     assert isinstance(fc1, nn.Linear)
     assert isinstance(fc2, nn.Linear)
     # assert fc1.out_features == fc2.in_features
 
     scales = scales.to(fc1.weight.device).to(fc1.weight.dtype)
 
-    # fc1.weight.div_(scales.view(-1, 1)) 解释一下：scales.size(0)为fc2.in_feature 这刚好是fc.out_feature 所以fc1.weight[-scales.size(0) :]是将所有行÷ scales 负号是从后往前数，不过一般来说两个维度是一样的，这么做可能是为了处理一些特殊情况。
+    # fc1.weight.div_(scales.view(-1, 1)) 解释一下：scales.size(0)为fc2.in_feature 这刚好是fc1.out_feature 所以fc1.weight[-scales.size(0) :]是将所有行÷ scales 负号是从后往前数，不过一般来说两个维度是一样的，这么做可能是为了处理一些特殊情况。
     fc1.weight[-scales.size(0) :].div_(scales.view(-1, 1))# 此处的表述比较奇怪，但是其本质就是让fc1的权重÷scales 再让fc2的权重×scales
                                                     # 不论是注意力机制的 v 和 out两个ffn 还是 瓶颈结构的先升后降ffn ,fc1.out_feature == fc2.in_feature 虽然蹩脚，但没问题
     if fc1.bias is not None:
@@ -104,7 +107,7 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat):
 
     else:
 
-        def w_quantize_func(p): #若没有提供量化位宽，直接返回原始的权重。可能是为了进行消融实验
+        def w_quantize_func(p): #若没有提供量化位宽，直接返回原始的权重。这么做是为了在不进行量化的情况下保持权重不变，方便进行消融实验或调试
             return p
 
     if "use_cache" in module_kwargs:
@@ -139,8 +142,8 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat):
             scales = scales / (scales.max() * scales.min()).sqrt() #使缩放因子在对数空间对称分布，保持数值范围的平衡
             for fc in linears2scale:
                 #要注意！此处的scales是由激活值x产生，而与权重w无关，这里的缩放因子对应的是论文中的's'
-                #而不是零点量化中的 scales 那个缩放因子是来自于权重w，与激活值是无关的。不要混淆了。
-                #此处先乘后除的操作是： 找 s，使得 Q(W / s) * s ≈ W 。但对激活 A 敏感：min || (W * A) - (s * Q(W / s) * A) ||^2≈ min MSE(out, org_out)。
+                #而不是零点量化中的 scales 那个缩放因子或者说缩放步长Δ 是来自于权重w，与激活值是无关的。不要混淆了。
+                #此处先乘后除的操作是： 找 s，使得 Q(W * s) / s ≈ W 。但对激活 A 敏感：min || (W * A) - ( Q(W * s) / s * A) ||^2≈ min MSE(out, org_out)。
                 fc.weight.mul_(scales.view(1, -1).to(fc.weight.device)) #临时 W' = W * s，"放大" 权重通道，使后续伪量化"看到" 调整后分布。（inplace操作避免 copy 大 tensor）
                 fc.weight.data = w_quantize_func(fc.weight.data) / (scales.view(1, -1)) #注入量化噪声后"还原"权重
             out = block(x, **kwargs) #拿到权重缩放之后的块输出

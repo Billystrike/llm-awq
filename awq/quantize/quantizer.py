@@ -11,7 +11,11 @@ EMBEDDING_KEYWORDS = ["embed"]
 LM_HEAD_KEYWORDS = ["lm_head", "embed_out", "output"]
 
 
-def scale_activations(module):#将线性层之间的激活函数变成带缩放版本的激活函数
+def scale_activations(module):
+    '''
+    将ffn之间的激活函数变成带缩放版本的激活函数,换句话说就是在激活函数的输出上乘以一个可学习的缩放因子
+    目前支持的模型有：Bloom、MPT、Falcon、BigCode、NeoX
+    '''
     param = next(module.parameters())
     dtype = param.dtype
     device = param.device
@@ -75,7 +79,7 @@ def pseudo_quantize_tensor(
         min_val = w.amin(dim=1, keepdim=True)#返回每一组的权重最小值
         max_int = 2**n_bit - 1 #nbit 表示的最大值
         min_int = 0 #无符号数最小值为0
-        scales = (max_val - min_val).clamp(min=1e-5) / max_int #形状：(out_feature * in_feature / q_group_size,1)
+        scales = (max_val - min_val).clamp(min=1e-5) / max_int #计算缩放步长Δ 形状：(out_feature * in_feature / q_group_size,1) 
         zeros = (-torch.round(min_val / scales)).clamp_(min_int, max_int) #形状：(out_feature * in_feature / q_group_size,1)
     # we actually never used this
     else:  # we actually never used this 最大绝对值量化适用于对称权重值
@@ -145,16 +149,16 @@ def real_quantize_model_weight(model, w_bit, q_config, init_only=False):
         desc="real weight quantization..." + ("(init only)" if init_only else ""),
     ):
         layer = layers[i]
-        named_linears = get_named_linears(layer)#拿到单个blcok中带名字的线性层
-        scale_activations(layer)#将单个blcok中线性层的激活函数变成缩放版本的激活函数
+        named_linears = get_named_linears(layer)#拿到单个block中带名字的线性层
+        scale_activations(layer)#将单个block中ffn的激活函数变成缩放版本的激活函数
 
-        for name, module in named_linears.items():#此处的module就是对应一个具体的线性层
+        for name, module in named_linears.items():#此处的module就是对应一个具体的nn.Linear
             if init_only:
                 q_linear = WQLinear.from_linear(
                     module, w_bit, q_config["q_group_size"], True
                 )
                 q_linear.to(next(layer.parameters()).device)
-                set_op_by_name(layer, name, q_linear)#将layers[i]中的具体的线性层替换成量化版本的线性层，在此之前已经完成了缩放版激活函数的替换
+                set_op_by_name(layer, name, q_linear)#将layers[i]中的具体的线性层替换成量化版本的线性层，在此之前已经完成了对ffn缩放版激活函数的替换
             else:#如果不是仅初始化
                 module.cuda()
                 module.weight.data, scales, zeros = pseudo_quantize_tensor(#通过伪量化拿到【被离散化到了量化精度对应水平的】权重，缩放因子和零点

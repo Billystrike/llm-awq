@@ -40,3 +40,5 @@ print(f'PyTorch检测到的CUDA_HOME: {CUDA_HOME}')
 print(f'GPU名称: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else "无"}')
 
 import awq_inference_engine
+
+print('awq_inference_engine version:', awq_inference_engine.__version__)

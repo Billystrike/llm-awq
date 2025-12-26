@@ -104,7 +104,7 @@ vila_10_quant_mode = (#判断当前模型属于哪个版本的多模态模型
 )
 #Example: 0:10GiB 1:10GiB cpu:30GiB
 max_memory = [v.split(":") for v in (args.max_memory or [])] #根据冒号来分割模型并行情况下各显卡分匹配的显存量。
-max_memory = {(int(k) if k.isdigit() else k): v for k, v in max_memory}#根据分割的结果构建字典
+max_memory = {(int(k) if k.isdigit() else k): v for k, v in max_memory}#根据分割的结果构建字典，e.g., {0: '10GiB', 1: '10GiB', 'cpu': '30GiB'}
 
 if args.auto_parallel:
     gpu_list = auto_parallel(args)
@@ -123,12 +123,12 @@ def build_model_and_enc(model_path, dtype):
     '''
     这个函数你可以
     1 args.load_quant读取以往已经量化成int4的权重来获取量化后的模型
-    2 如果没有现成已经量化成int4的模型权重可以读取，那就现场跑一遍量化流程
-    2.1.1 args.load_awq 如果有之前计算过的AWQ搜索结果那就直接读取搜索结果对权重进行scales和clip。
-    2.1.2 args.run_awq 反之如果没有进行过AWQsearch的话还要再跑一边AWQsearch，注意AWQsearch执行完之后会直接【exit】不会自动apply 需要在运行一遍走2.1.1
+    2.1 如果没有现成已经量化成int4的模型权重可以读取，那就现场跑一遍量化流程
+        2.1.1 args.load_awq 如果有之前计算过的AWQ搜索结果那就直接读取搜索结果对权重进行scales和clip。
+        2.1.2 args.run_awq 反之如果没有进行过AWQsearch的话还要再跑一边AWQsearch，注意AWQsearch执行完之后会直接【exit】不会自动apply 需要在运行一遍走2.1.1
     2.2应用完scales和clip之后开始执行权重量化
-    2.2.1 args.q_backend == "fake" 执行伪量化，先量化紧接着反量化，维持FP精度，目的是为了检验AWQ量化的效果
-    2.2.2 args.q_backend == "real" 执行真正的量化流程：先伪量化计算scales和zero，再传给WQLinear实例化weight quantized linear 将model 的权重真的变成INT
+        2.2.1 args.q_backend == "fake" 执行伪量化，先量化紧接着反量化，维持FP精度，目的是为了检验AWQ量化的效果
+        2.2.2 args.q_backend == "real" 执行真正的量化流程：先伪量化计算scales和zero，再传给WQLinear实例化weight quantized linear 将model 的权重真的变成INT
     2.3执行完real quantization之后通过args.dump_quant指定保存路径 将量化之后的模型权重保存，下次就可以通过1读取了。
     最终返回的结果是经过量化之后的 model 和 对应model的enc（或者说tokenizer）
     '''
@@ -165,10 +165,10 @@ def build_model_and_enc(model_path, dtype):
     if args.load_quant:  # directly load quantized weights
         print("Loading pre-computed quantized weights...")
         with init_empty_weights():
-            model = AutoModelForCausalLM.from_config( #from_config 只是加载模型的结构，权重随机
+            model = AutoModelForCausalLM.from_config( #from_config 只是加载模型的结构，不加载权重
                 config=config, torch_dtype=torch_dtype, trust_remote_code=True
             )
-        real_quantize_model_weight( #由于init_only 所以将model中的全部带名字的线性层替换成初始化的q_linear，权重矩阵为0矩阵
+        real_quantize_model_weight( #由于init_only 所以将model中的全部带名字的线性层替换成初始化的q_linear，权重矩阵为0矩阵，注意对应model的ffn激活函数已经被替换成缩放版本的激活函数了 
             model, w_bit=args.w_bit, q_config=q_config, init_only=True
         )
 
@@ -178,7 +178,7 @@ def build_model_and_enc(model_path, dtype):
         kwargs = {"max_memory": max_memory} if len(max_memory) else {} #如果之前显示指定了每个GPU的显存分配，就将他变为字典中的值，方便传给infer_auto_device_map
         device_map = infer_auto_device_map( #根据device map优先将模型放在GPU上，如果GPU显存不够再放到CPU上，CPU内存不够再放到硬盘上
             model,
-            no_split_module_classes=[ #不能跨设备的块，这些块含有残差连接，如果跨设备计算来回传输数据消耗时间过多。
+            no_split_module_classes=[ #不能跨设备的块，因为这些块内部有自注意力机制，跨设备会导致计算复杂度爆炸
                 "OPTDecoderLayer",
                 "LlamaDecoderLayer",
                 "BloomBlock",
@@ -191,10 +191,10 @@ def build_model_and_enc(model_path, dtype):
         load_checkpoint_in_model(
             model,
             checkpoint=args.load_quant, #load_quant: 量化权重文件路径
-            device_map=device_map,
-            offload_state_dict=True,
+            device_map=device_map, #模型权重分配到各个设备的映射关系
+            offload_state_dict=True, #如果模型权重无法完全加载到GPU内存中，就将部分权重临时存放到CPU内存中
         )
-        # Dispatch model
+        #接下来将模型分配到各个设备上
         model = simple_dispatch_model(model, device_map=device_map)
 
         model.eval()

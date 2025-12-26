@@ -44,16 +44,16 @@ def auto_clip_layer(
         #首先是对于两个矩阵相乘的数学表示 假设有矩阵A(mxn) B(nxl) 若C=A@B 则C[i,j]=Σ_{k=0}^{n-1} A[i,k] x B[k,j]
         #对应地设现有W(out,in) Input(n,in) 那么 Output=Input@W Output[i,j]=Σ_{k=0}^{in-1} Input[i,k] x W[k,j]
         #但是我们的目标并不是去计算总的output并以此来计算损失，这么做峰值计算量会很大，可能会OOM。我们的目的是找到每个group中最合适的clip
-        #于是对W和Input的形状做了重组。W->(out,1,n_group,grou_size) Input->(1,n,n_group,group_size)  为了方便理解后面再解释此处为什么不是oc_batch而是out，还有此处也没有引入n_sample
+        #于是对W和Input的形状做了重组。W->(out,1,n_group,group_size) Input->(1,n,n_group,group_size)  为了方便理解后面再解释此处为什么不是oc_batch而是out，还有此处也没有引入n_sample
         #相乘的结果为Output'(out,n,n_group,group_size)  这个时候如果对最后两个维度分别求和就得到了初始的W 和 Input矩阵相乘的结果
         #也就是 Output[i,j]=Σ_{group=0}^{n_group-1}Σ_{offset=0}^{group_size-1} Input[i,group x 32+offset] x W[group x 32+offset,j]
         #                 = Σ_{k=0}^{in-1} Input[i,k] x W[k,j] 两者是等价的。可以动手写一下方便理解。
         #但是上面也说了我们目标并不是去求原始的Output 所以就只针对最后一个维度进行了sum操作。此时的形状变成了(out,n,n_group) 这是对原始矩阵乘法的一种近似表达，如果此时再对n_group维度进行sum就得到一样的结果了
         #此时结算的结果是以组为单位的，正好契合了我们针对每个group来算最佳clip的需求。而且还免去了在进行sum的计算量
-        # 接下来讨论一下防止OOM的优化 ①对于Input我们并不是计算了完整的n 而是对n进行了均匀的采样。所以实际输入的Input是(1, n_sample, n_group, group size)
+        # 接下来讨论一下防止OOM的优化 ①对于Input我们并不是计算了完整的n 而是对n进行了均匀的采样。所以实际输入的Input是(1, n_sample, n_group, group_size)
         #② 我们还将w的形状变成了(oc_batch,1,n_group,group_size) ，也没有一下将全部的out维度输入。基于以上两点我们得到的最终org_out形状就是下面的样子了
 
-        org_out = (input_feat * w).sum(dim=-1)  # (oc_batch_size,n_sample,n_group)=((oc_batch,1,n_group,group_size)*(1, n_sample, n_group, group size)).sum(-1)
+        org_out = (input_feat * w).sum(dim=-1)  # (oc_batch_size,n_sample,n_group)=((oc_batch,1,n_group,group_size)*(1, n_sample, n_group, group_size)).sum(-1)
 
         for i_s in range(int(max_shrink * n_grid)): #grid search loop
             max_val = org_max_val * (1 - i_s / n_grid) #随着循环的进行，max_val在逐渐缩小,也就是在逐渐shrink每个group中的最大值 (oc_batch_size, 1, n_group, 1)
@@ -66,7 +66,7 @@ def auto_clip_layer(
             del cur_w
             del cur_out
             cur_best_idx = err < min_errs #cur_best_idx.shape (oc_batch, 1, n_group, 1)与err一致，
-                                            # 其本质是一个掩码 里边存放的全是True or Fales 如果err对应位置比min_err小就为True
+                                            # 其本质是一个掩码 里边存放的全是True or False 如果err对应位置比min_err小就为True
             min_errs[cur_best_idx] = err[cur_best_idx] #将min_err更新，存放损失较小的那一个
             best_max_val[cur_best_idx] = max_val[cur_best_idx] #将本次网格搜索中减少了损失的、缩放后的权重最大值（以group为单位）保存下来 (oc_batch_size, 1, n_group, 1)
         best_max_val_all.append(best_max_val) #每次将 oc_batch 个权重的最佳缩放值存起来
