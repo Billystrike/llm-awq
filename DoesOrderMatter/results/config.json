@@ -1,0 +1,38 @@
+{
+  "model_name": "/root/autodl-tmp/models--meta-llama--Llama-2-7b-hf/",
+  "device": "cuda",
+  "torch_dtype": "torch.float16",
+  "ppl_datasets": [
+    "wikitext2",
+    "c4",
+    "ptb"
+  ],
+  "zeroshot_tasks": [
+    "hellaswag",
+    "piqa",
+    "arc_easy",
+    "boolq"
+  ],
+  "num_fewshot": 0,
+  "ppl_seqlen": 2048,
+  "ppl_n_samples": 128,
+  "calib_dataset": "pileval",
+  "calib_n_samples": 128,
+  "calib_seqlen": 512,
+  "collect_activations": true,
+  "activation_layers": [
+    10,
+    15,
+    20,
+    25,
+    30
+  ],
+  "activation_n_samples": 32,
+  "seed": 42,
+  "offline_mode": true,
+  "download_max_retries": 3,
+  "download_retry_delay": 2,
+  "output_dir": "DoesOrderMatter/results",
+  "checkpoint_dir": "DoesOrderMatter/checkpoints",
+  "log_dir": "DoesOrderMatter/logs"
+}

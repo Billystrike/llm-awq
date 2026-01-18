@@ -66,6 +66,11 @@ class ExperimentConfig:
         # Reproducibility
         self.seed = 42
         
+        # Dataset loading configuration
+        self.offline_mode = False  # Set to True to use only cached datasets
+        self.download_max_retries = 3
+        self.download_retry_delay = 2  # seconds
+        
         # Output configuration
         self.output_dir = Path(__file__).parent / "results"
         self.checkpoint_dir = Path(__file__).parent / "checkpoints"
@@ -73,11 +78,21 @@ class ExperimentConfig:
         
     def to_dict(self) -> Dict:
         """Convert config to dictionary for logging"""
-        return {k: str(v) if isinstance(v, Path) else v 
-                for k, v in self.__dict__.items()}
+        result = {}
+        for k, v in self.__dict__.items():
+            if isinstance(v, Path):
+                result[k] = str(v)
+            elif isinstance(v, torch.dtype):
+                result[k] = str(v)
+            elif isinstance(v, list):
+                result[k] = v
+            else:
+                result[k] = v
+        return result
     
     def save(self, filepath: Path):
         """Save configuration to JSON"""
+        filepath.parent.mkdir(parents=True, exist_ok=True)
         with open(filepath, 'w') as f:
             json.dump(self.to_dict(), f, indent=2)
 
@@ -128,6 +143,11 @@ def load_model_and_tokenizer(
         use_fast=False
     )
     
+    # Set pad_token for models that don't have one (like LLaMA)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+    
     model = AutoModelForCausalLM.from_pretrained(
         config.model_name,
         torch_dtype=config.torch_dtype,
@@ -151,30 +171,167 @@ def load_model_and_tokenizer(
 # Perplexity Evaluation
 # ============================================================================
 
-def get_ppl_dataset(dataset_name: str, tokenizer, seqlen: int, n_samples: int):
+def find_c4_cache():
+    """Find C4 dataset in cache directory"""
+    from pathlib import Path
+    cache_dir = Path.home() / ".cache" / "huggingface" / "datasets"
+    
+    # Look for allenai___c4 directories
+    c4_dirs = list(cache_dir.glob("allenai___c4/*"))
+    
+    if not c4_dirs:
+        return None
+    
+    # Return the first valid cache directory
+    for c4_dir in c4_dirs:
+        # Check if it has validation split
+        validation_paths = [
+            c4_dir / "validation",
+            c4_dir / "en" / "validation",
+        ]
+        for val_path in validation_paths:
+            if val_path.exists():
+                return c4_dir
+    
+    return c4_dirs[0] if c4_dirs else None
+
+
+def get_ppl_dataset(dataset_name: str, tokenizer, seqlen: int, n_samples: int, offline_mode: bool = False):
     """Load and prepare dataset for PPL evaluation"""
+    import time
+    import os
     
-    if dataset_name == "wikitext2":
-        test_data = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
-        test_enc = tokenizer("\n\n".join(test_data["text"]), return_tensors="pt")
-        
-    elif dataset_name == "c4":
-        val_data = load_dataset(
-            "allenai/c4",
-            data_files={"validation": "en/c4-validation.00000-of-00008.json.gz"},
-            split="validation"
-        )
-        val_enc = tokenizer(" ".join(val_data[:1100]["text"]), return_tensors="pt")
-        test_enc = val_enc
-        
-    elif dataset_name == "ptb":
-        test_data = load_dataset("ptb_text_only", "penn_treebank", split="test")
-        test_enc = tokenizer(" ".join(test_data["sentence"]), return_tensors="pt")
-        
-    else:
-        raise ValueError(f"Unknown dataset: {dataset_name}")
+    # Set offline mode environment variable to prevent any network access
+    if offline_mode:
+        os.environ["HF_DATASETS_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
     
-    return test_enc
+    # Set download mode
+    download_mode = "force_redownload" if not offline_mode else None
+    
+    max_retries = 1 if offline_mode else 3
+    
+    for attempt in range(max_retries):
+        try:
+            if dataset_name == "wikitext2":
+                test_data = load_dataset(
+                    "wikitext", 
+                    "wikitext-2-raw-v1", 
+                    split="test",
+                    download_mode="reuse_cache_if_exists"
+                )
+                test_enc = tokenizer("\n\n".join(test_data["text"]), return_tensors="pt")
+                
+            elif dataset_name == "c4":
+                # Use completely offline mode for C4 to avoid network issues
+                from datasets import load_from_disk, Dataset
+                import glob
+                
+                c4_cache = find_c4_cache()
+                
+                if not c4_cache:
+                    raise RuntimeError(
+                        f"C4 dataset not found in cache. "
+                        f"Please run 'python download_datasets.py' first."
+                    )
+                
+                logging.info(f"Loading C4 from cache: {c4_cache}")
+                
+                # Force complete offline mode
+                os.environ["HF_DATASETS_OFFLINE"] = "1"
+                os.environ["HF_HUB_OFFLINE"] = "1"
+                
+                # Try multiple loading strategies
+                val_data = None
+                errors = []
+                
+                # Strategy 1: load_from_disk on specific subfolders
+                for subpath in ["validation", "en-validation", "default-c7bc8b0aefc5e48f"]:
+                    if val_data is not None:
+                        break
+                    val_path = c4_cache / subpath
+                    if val_path.exists():
+                        try:
+                            val_data = load_from_disk(str(val_path))
+                            logging.info(f"Successfully loaded from {val_path}")
+                            break
+                        except Exception as e:
+                            errors.append(f"load_from_disk({subpath}): {e}")
+                
+                # Strategy 2: Find and load Arrow files directly
+                if val_data is None:
+                    try:
+                        # Look for validation arrow files
+                        arrow_patterns = [
+                            str(c4_cache / "**" / "*validation*.arrow"),
+                            str(c4_cache / "**" / "*.arrow"),
+                        ]
+                        
+                        arrow_files = []
+                        for pattern in arrow_patterns:
+                            arrow_files.extend(glob.glob(pattern, recursive=True))
+                        
+                        if arrow_files:
+                            # Filter for validation files
+                            validation_files = [f for f in arrow_files if 'validation' in f.lower()]
+                            if not validation_files:
+                                validation_files = arrow_files  # Use any available
+                            
+                            logging.info(f"Found Arrow files: {validation_files[:3]}")
+                            
+                            # Load directly from Arrow file using Dataset.from_file()
+                            arrow_file = validation_files[0]
+                            val_data = Dataset.from_file(arrow_file)
+                            logging.info(f"Successfully loaded from Arrow file: {arrow_file}")
+                        else:
+                            errors.append("No Arrow files found in cache")
+                    except Exception as e:
+                        errors.append(f"Arrow file loading: {e}")
+                
+                # Strategy 3: Try loading the entire cache directory
+                if val_data is None:
+                    try:
+                        val_data = load_from_disk(str(c4_cache))
+                        logging.info(f"Successfully loaded entire cache directory")
+                    except Exception as e:
+                        errors.append(f"load entire cache: {e}")
+                
+                if val_data is None:
+                    raise RuntimeError(
+                        f"Failed to load C4 from cache at {c4_cache}. "
+                        f"Tried multiple strategies. Errors:\\n" + "\\n".join(errors)
+                    )
+                
+                # Ensure we have a validation split
+                if hasattr(val_data, 'keys') and 'validation' in val_data:
+                    val_data = val_data['validation']
+                
+                val_enc = tokenizer(" ".join(val_data[:1100]["text"]), return_tensors="pt")
+                test_enc = val_enc
+                
+            elif dataset_name == "ptb":
+                test_data = load_dataset(
+                    "ptb_text_only", 
+                    "penn_treebank", 
+                    split="test", 
+                    trust_remote_code=True,
+                    download_mode="reuse_cache_if_exists"
+                )
+                test_enc = tokenizer(" ".join(test_data["sentence"]), return_tensors="pt")
+                
+            else:
+                raise ValueError(f"Unknown dataset: {dataset_name}")
+            
+            return test_enc
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                logging.warning(f"Failed to load {dataset_name} (attempt {attempt + 1}/{max_retries}): {e}")
+                logging.warning(f"Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                raise RuntimeError(f"Failed to load {dataset_name} after {max_retries} attempts: {e}")
 
 
 @torch.no_grad()
@@ -188,14 +345,22 @@ def evaluate_perplexity(
     """Evaluate perplexity on a specific dataset"""
     logger.info(f"Evaluating PPL on {dataset_name}...")
     
-    test_enc = get_ppl_dataset(dataset_name, tokenizer, config.ppl_seqlen, config.ppl_n_samples)
+    test_enc = get_ppl_dataset(dataset_name, tokenizer, config.ppl_seqlen, config.ppl_n_samples, config.offline_mode)
     test_ids = test_enc.input_ids
+    
+    # Check if we have enough data
+    if test_ids.numel() < config.ppl_seqlen:
+        logger.warning(f"Dataset {dataset_name} has insufficient tokens ({test_ids.numel()} < {config.ppl_seqlen})")
+        raise ValueError(f"Insufficient data for {dataset_name}")
     
     nsamples = test_ids.numel() // config.ppl_seqlen
     
     # Limit samples if specified
     if config.ppl_n_samples > 0:
         nsamples = min(nsamples, config.ppl_n_samples)
+    
+    if nsamples == 0:
+        raise ValueError(f"No samples available for {dataset_name}")
     
     nlls = []
     logger.info(f"Number of samples: {nsamples}")
@@ -241,10 +406,14 @@ def evaluate_zeroshot(
         batch_size=1
     )
     
-    # Run evaluation
+    # Run evaluation - use evaluator.evaluate for lm-eval 0.3.0
+    from lm_eval import tasks as lm_tasks
+    
+    task_dict = lm_tasks.get_task_dict(tasks)
+    
     results = evaluator.evaluate(
         lm=lm,
-        task_dict={task: None for task in tasks},
+        task_dict=task_dict,
         num_fewshot=num_fewshot,
         limit=None,
         bootstrap_iters=0,  # Disable bootstrap for speed
@@ -293,20 +462,26 @@ class ActivationCollector:
             if isinstance(output, tuple):
                 output = output[0]  # For layers that return tuples
             
-            act = output.detach()
-            
+            act = output.detach().to(torch.float32)
+
             # Collect statistics instead of full activations
+            act_mean = act.mean()
+            act_std = act.std()
+
+            # Clamp std to avoid division by zero in outlier computation
+            act_std = torch.clamp(act_std, min=1e-6)
+
             stats = {
-                "mean": act.mean().item(),
-                "std": act.std().item(),
+                "mean": act_mean.item(),
+                "std": act_std.item(),
                 "max": act.max().item(),
                 "min": act.min().item(),
                 "q99": act.quantile(0.99).item(),
                 "q95": act.quantile(0.95).item(),
                 "q90": act.quantile(0.90).item(),
                 # Outlier detection (>6 sigma)
-                "outlier_ratio_6sigma": (act.abs() > (act.mean() + 6 * act.std())).float().mean().item(),
-                "outlier_ratio_4sigma": (act.abs() > (act.mean() + 4 * act.std())).float().mean().item(),
+                "outlier_ratio_6sigma": (act.abs() > (act_mean.abs() + 6 * act_std)).float().mean().item(),
+                "outlier_ratio_4sigma": (act.abs() > (act_mean.abs() + 4 * act_std)).float().mean().item(),
             }
             
             self.activations[layer_idx].append(stats)
@@ -380,8 +555,12 @@ def collect_activations(
     
     # Forward pass through calibration data
     for i, batch in enumerate(tqdm(calib_data, desc="Collecting activations")):
-        batch = batch.to(model.device)
-        _ = model(batch)
+        try:
+            batch = batch.to(model.device)
+            _ = model(batch)
+        except Exception as e:
+            logger.warning(f"Error processing batch {i}: {e}")
+            continue
         
         if i >= config.activation_n_samples:
             break
@@ -500,9 +679,14 @@ def main(args):
         config.output_dir = Path(args.output_dir)
     if not args.collect_activations:
         config.collect_activations = False
+    if args.offline:
+        config.offline_mode = True
     
     # Setup logging
     logger = setup_logging(config)
+    
+    if config.offline_mode:
+        logger.info("Running in OFFLINE mode - using only cached datasets")
     logger.info("=" * 80)
     logger.info("BASELINE EVALUATION START")
     logger.info("=" * 80)
@@ -602,6 +786,12 @@ if __name__ == "__main__":
         dest="collect_activations",
         action="store_false",
         help="Disable activation collection"
+    )
+    
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Use only cached datasets (no internet required)"
     )
     
     args = parser.parse_args()

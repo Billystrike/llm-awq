@@ -1,0 +1,157 @@
+{
+  "experiment_info": {
+    "timestamp": "2026-01-17T14:17:27.232093",
+    "model": "/root/autodl-tmp/models--meta-llama--Llama-2-7b-hf/",
+    "config": {
+      "model_name": "/root/autodl-tmp/models--meta-llama--Llama-2-7b-hf/",
+      "device": "cuda",
+      "torch_dtype": "torch.float16",
+      "ppl_datasets": [
+        "wikitext2",
+        "c4",
+        "ptb"
+      ],
+      "zeroshot_tasks": [
+        "hellaswag",
+        "piqa",
+        "arc_easy",
+        "boolq"
+      ],
+      "num_fewshot": 0,
+      "ppl_seqlen": 2048,
+      "ppl_n_samples": 128,
+      "calib_dataset": "pileval",
+      "calib_n_samples": 128,
+      "calib_seqlen": 512,
+      "collect_activations": true,
+      "activation_layers": [
+        10,
+        15,
+        20,
+        25,
+        30
+      ],
+      "activation_n_samples": 32,
+      "seed": 42,
+      "offline_mode": true,
+      "download_max_retries": 3,
+      "download_retry_delay": 2,
+      "output_dir": "DoesOrderMatter/results",
+      "checkpoint_dir": "DoesOrderMatter/checkpoints",
+      "log_dir": "DoesOrderMatter/logs"
+    }
+  },
+  "perplexity": {
+    "wikitext2": {
+      "dataset": "wikitext2",
+      "ppl": 5.503997802734375,
+      "nsamples": 128,
+      "seqlen": 2048
+    },
+    "c4": {
+      "dataset": "c4",
+      "ppl": 7.145003795623779,
+      "nsamples": 128,
+      "seqlen": 2048
+    },
+    "ptb": {
+      "dataset": "ptb",
+      "ppl": 37.91623306274414,
+      "nsamples": 49,
+      "seqlen": 2048
+    }
+  },
+  "zeroshot": {
+    "hellaswag": {
+      "accuracy": 0.5672176857199761,
+      "all_metrics": {
+        "acc": 0.5672176857199761,
+        "acc_stderr": 0.004944485990639519,
+        "acc_norm": 0.7295359490141406,
+        "acc_norm_stderr": 0.004432917403755055
+      }
+    },
+    "piqa": {
+      "accuracy": 0.7834602829162133,
+      "all_metrics": {
+        "acc": 0.7834602829162133,
+        "acc_stderr": 0.009609984714384612,
+        "acc_norm": 0.7693144722524483,
+        "acc_norm_stderr": 0.0098289595509831
+      }
+    },
+    "arc_easy": {
+      "accuracy": 0.6927609427609428,
+      "all_metrics": {
+        "acc": 0.6927609427609428,
+        "acc_stderr": 0.00946668883247538,
+        "acc_norm": 0.5357744107744108,
+        "acc_norm_stderr": 0.01023348870972654
+      }
+    },
+    "boolq": {
+      "accuracy": 0.710703363914373,
+      "all_metrics": {
+        "acc": 0.710703363914373,
+        "acc_stderr": 0.007930643304471009
+      }
+    }
+  },
+  "activations": {
+    "layer_10": {
+      "mean": -0.0005897598873291697,
+      "std": 0.10846503504684993,
+      "max": 3.2898995535714284,
+      "min": -3.332310267857143,
+      "q99": 0.2521885463169643,
+      "q95": 0.174560546875,
+      "q90": 0.13459123883928573,
+      "outlier_ratio_6sigma": 0.00017070770263671875,
+      "outlier_ratio_4sigma": 0.00037097930908203125
+    },
+    "layer_15": {
+      "mean": -0.00044701248719190644,
+      "std": 0.1649183024253164,
+      "max": 4.840680803571429,
+      "min": -3.891880580357143,
+      "q99": 0.38813999720982145,
+      "q95": 0.26838902064732145,
+      "q90": 0.20691789899553573,
+      "outlier_ratio_6sigma": 0.00012104851858956473,
+      "outlier_ratio_4sigma": 0.00039587702069963725
+    },
+    "layer_20": {
+      "mean": 0.00033073575286834966,
+      "std": 0.26533491909503937,
+      "max": 6.5546875,
+      "min": -6.246372767857143,
+      "q99": 0.6415666852678571,
+      "q95": 0.43104771205357145,
+      "q90": 0.32887486049107145,
+      "outlier_ratio_6sigma": 0.00015762874058314731,
+      "outlier_ratio_4sigma": 0.0008042539869035993
+    },
+    "layer_25": {
+      "mean": -0.0004225898740384894,
+      "std": 0.3015021085739136,
+      "max": 4.929547991071429,
+      "min": -10.218191964285714,
+      "q99": 0.727783203125,
+      "q95": 0.48876953125,
+      "q90": 0.37161690848214285,
+      "outlier_ratio_6sigma": 0.00012373924255371094,
+      "outlier_ratio_4sigma": 0.0007016658782958984
+    },
+    "layer_30": {
+      "mean": -0.001517761793885646,
+      "std": 2.8243880612509593,
+      "max": 1362.0,
+      "min": -2281.9285714285716,
+      "q99": 1.5228794642857142,
+      "q95": 0.9732840401785714,
+      "q90": 0.7379673549107143,
+      "outlier_ratio_6sigma": 2.5102070399693082e-05,
+      "outlier_ratio_4sigma": 8.245876857212611e-05
+    }
+  }
+}
